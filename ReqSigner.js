@@ -3,11 +3,15 @@ const gost89 = require("gost89");
 const http = require("http");
 const url = require("url");
 require('./rand-shim.js');
+const fs = require("fs");
+const https = require("https");
+const algos = gost89.compat.algos;
 
-let query = function (method, toUrl, headers, payload, cb) {
+var query = function(method, toUrl, headers, payload, cb) {
     var parsed = url.parse(toUrl);
-    var req = http.request({
-        host: parsed.host,
+    var module = {'http:': http, 'https:': https}[parsed.protocol];
+    var req = module.request({
+        host:  parsed.host,
         path: parsed.path,
         headers: headers,
         method: method,
@@ -17,46 +21,76 @@ let query = function (method, toUrl, headers, payload, cb) {
             chunks.push(chunk);
         });
         res.on('end', function () {
-            cb(Buffer.concat(chunks));
+            cb(Buffer.concat(chunks), res.statusCode);
         });
     });
-    req.on('error', function (e) {
-        cb(null);
+    req.on('error', function(e) {
+        cb(null, 599);
     });
     req.write(payload);
     req.end();
 };
 
+function key_param_parse(key) {
+    let pw;
+    if (key.indexOf(":") !== -1) {
+        pw = key.substr(key.indexOf(":") + 1);
+        key = key.substr(0, key.indexOf(":"));
+    }
+    return {
+        path: key,
+        pw: pw,
+    };
+}
+
+function listOf(value) {
+    if (!value) {
+        return [];
+    }
+    if (Array.isArray(value)) {
+        return value;
+    }
+    return [value];
+}
+
+class ReadFileError extends Error {}
+
+function readFile(filename) {
+    return new Promise((resolve, reject) => {
+        fs.readFile(filename, (err, data) => {
+            if (err) {
+                console.log(`error to read file: ${err.toString()}`);
+                reject(new ReadFileError());
+            } else {
+                resolve(data);
+            }
+        });
+    });
+}
+
 class ReqSigner {
-    constructor(pass, role, keyPath, certPath) {
+    constructor(pass, role, keyPath) {
         this.pass = pass;
         this.role = role;
-        this.keyPath = keyPath;
-        this.certPath = certPath;
+        this.keyPath = keyPath
         this.box = null;
     }
 
-    async getLocalBox() {
-        const param = {
-            algo: gost89.compat.algos(),
-            query: query,
-            keys: []
-        };
-        console.log(param.query)
-        param.keys[0] = {
-            privPath: this.keyPath,
-            password: this.pass
-            // certPath: this.certPath
-        };
-        return new jkurwa.Box(param);
+    async getLocalBox(key) {
+        const box = new jkurwa.Box({ algo: algos(), query: query });
+        const keyInfo = listOf(key).map(key_param_parse);
+        for (let { path, pw } of keyInfo) {
+            let buf = await readFile(path);
+            box.load({ keyBuffers: [buf], password: pw });
+        }
+        return box;
     }
 
-    async signText(data) {
-        let content = Buffer.from(data, 'utf8');
+    async signText(content) {
+        //let content = Buffer.from(data, 'utf8');
         if (!this.box)
-            this.box = await this.getLocalBox();
-        var dt = await this.box.findCertsCmp(["http://acskidd.gov.ua/services/cmp/"])
-        console.log(`${dt} datta`)
+            this.box = await this.getLocalBox(`${this.keyPath}:${this.pass}`);
+        await this.box.findCertsCmp(["http://acskidd.gov.ua/services/cmp/"])
         let headers = null;
         let pipe = [];
         pipe.push({

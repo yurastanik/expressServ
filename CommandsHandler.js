@@ -1,4 +1,5 @@
 const fs = require("fs")
+const ReqSigner = require("./ReqSigner");
 
 class CommandsHandler{
     data;
@@ -6,9 +7,9 @@ class CommandsHandler{
         this.data = value
     }
 
-    static parseData(data) {
+     static async parseData(data) {
         switch (data.Command) {
-            case "ZRep": return new CommandsHandler(data).docCommand("ZReport")
+            case "ZRep": return await new CommandsHandler(data).docCommand("ZReport")
             case "Shifts": return new CommandsHandler(data).shiftsCommand()
             case "Documents": return new CommandsHandler(data).jsonDocCommand("Documents")
             case "Check": return new CommandsHandler(data).docCommand("Receipt")
@@ -45,14 +46,16 @@ class CommandsHandler{
     }
 
 
-    docCommand(type) {
+    async docCommand(type) {
         var path = `${this.data.RegistrarNumFiscal}\\${type}\\${this.data.NumFiscal}.xml`
         var res = {}
         try {
-            res.data = fs.readFileSync(path, "utf8")
+            var signer = new ReqSigner("checkonline", false, "Key-66.dat")
+            res.data = await signer.signText(fs.readFileSync(path, "utf8"))
             res.code = 200
             res.type = "application/octet-stream"
         } catch (e) {
+            console.log(e)
             res.data = "No Content"
             res.code = 204
             res.type = "application/text"
